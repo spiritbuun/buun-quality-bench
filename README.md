@@ -1,21 +1,18 @@
 # buun-quality-bench
 
-Four harnesses for measuring **what a change does to a model's output quality** in
-llama.cpp — plus the measurement lessons we paid for getting them right.
+Four harnesses for measuring a model's output quality.
 
 They were built for KV-cache quantization, and several drivers deliberately expose
 KV-specific controls. The measurement principles also apply to weight quantization,
 fine-tunes, sampler changes, and kernel rewrites, but those uses need adapters rather than
 being drop-in promises.
 
-We wrote these after several rounds of confidently reaching the wrong conclusion.
-**Read `METHODOLOGY.md` before trusting any number these tools print** — especially
-anything that is a mean.
+Read `METHODOLOGY.md` before trusting any numbers these tools print.
 
-**Ground rule (rule 0):** everything here except the margin bench measures *fidelity to a
-reference model*, not goodness. A change can beat the reference on a downstream task while
-scoring worse on fidelity. Direct task outcomes answer goodness for that task; the rest are
-cheap, dense proxies. Always say which one you mean in a verdict.
+Everything here except the margin bench measures *fidelity to a reference model*, not
+goodness. A change can beat the reference on a downstream task while scoring worse on
+fidelity. Direct task outcomes answer goodness for that task; the rest are cheap, dense
+proxies.
 
 The basic model runs use upstream llama.cpp APIs and tools. Exact raw-anchor certification,
 last-K scoring, and layer-pricing need the small per-token dump hooks in `patches/`. The
@@ -41,7 +38,7 @@ The workhorse. A `{config} × {context depth}` matrix wrapping
 `llama-perplexity --kl-divergence`. Resumable; a bad cell does not stop later cells, but
 the campaign exits nonzero until every cell succeeds. Gives you
 mean/median/p99/max KLD, RMS Δp, and a free true-flip rate (`Same top p`) per cell.
-Judge on the **median**. Start here.
+Typically judge on the median. This should be ran before any other benchmark.
 
 ### 2. `hazard-bench/` — dense per-token decision-risk panel
 Answers the flip question directly. For each scored position it computes KL per unit of
@@ -50,11 +47,14 @@ more informative than a saturated pass/fail panel. Ships as a
 standalone tool using only the public `llama.h` API, so it drops into any llama.cpp tree.
 
 ### 3. `margin-bench/` — task-grounded arbiter
-The one that measures *goodness*. Synthetic long-context routing cases: an evidence package
-buried at depth behind confusable distractors, which the model must read back through
-whatever you changed. Scores the **minimum logprob margin** per case — calibrated
-distance-to-flip — and compares configs by paired per-case differences. Treat margins as
-secondary diagnostics after exact task outcomes, not as task accuracy.
+The one that measures goodness (for NIAH-type tasks). Synthetic long-context routing
+cases: an evidence package buried at depth behind confusable distractors, which the model
+must read back through whatever you changed. Scores the **minimum logprob margin** per case
+— calibrated distance-to-flip — and compares configs by paired per-case differences. Treat
+margins as secondary diagnostics after exact task outcomes, not as task accuracy.
+
+By using logprob margins we can distinguish fine differences within the same codec
+(codebooks, etc) or differences between quantization when NIAH panels 100% saturate.
 
 ### 4. `layer-pricing/` — build a measured degrade order
 For variable-bit-rate schemes that demote layers individually. Takes a per-(layer, side)
@@ -104,10 +104,6 @@ KV_TIERS='16384:base_f16kv_ctx16384_18ch.kld:18' \
 #    (serve each config, probe, then compare — see margin-bench/README.md)
 python3 margin-bench/paired_margins.py lp_candidate.jsonl lp_baseline.jsonl
 ```
-
-**Before reading any number:** run the anchor. A reference-vs-reference cell must score
-exactly zero (hazard: `flip_rate = mean_R = 0.0000`). If it doesn't, the instrument is
-broken — fix that first. This has caught more real problems for us than any single metric.
 
 ---
 
