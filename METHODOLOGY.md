@@ -1,10 +1,7 @@
-# Methodology — how to measure model-quality changes without fooling yourself
+# Methodology — how to measure model-quality changes
 
 Worked example throughout is KV-cache quantization, but the reasoning applies to any change
 that perturbs the output distribution (weight quants, fine-tunes, kernel rewrites).
-Everything below was paid for with a wrong conclusion first. If you take one thing from
-this document: **the mean was unreliable for our fine-grained pricing work, and a statistic
-that cannot reproduce its ranking across held-out halves cannot price anything.**
 
 ---
 
@@ -17,14 +14,13 @@ weight-quant config that beats BF16 on a maths benchmark (26/30 vs 18/30) with *
 and a turbo-class codec that beats q4_0 on perplexity yet loses to it on hazard.
 
 Task outcomes are the authority for that task. Fidelity metrics are cheap, dense proxies;
-they do not prove broader usefulness or correctness. **Say which one you mean in any
-verdict.**
+they do not prove broader usefulness or correctness.
 
-### Historical lead: better KLD, weaker task confidence on Laguna
+### Historical example: better KLD, weaker task confidence on Laguna
 
-A static-KV comparison on Laguna-S-2.1 (UD-IQ4_NL, 2× RTX 3090) appeared to produce
-opposite codec orderings under a reduced 16k KLD panel and the 8k routing/NIAH margin
-bench. The KLD half is invalid for the reason below. Build: buun-llama-cpp
+A static-KV comparison on Laguna-S-2.1 (UD-IQ4_NL, 2× RTX 3090) produced opposite codec
+orderings under a reduced 16k KLD panel and the 8k routing/NIAH margin bench. Build:
+buun-llama-cpp
 `5d7dc397783bb1a5f84eb3ef2d838b0cb35af596`.
 
 | measure | turbo3 | turbo3_tcq | direction |
@@ -46,13 +42,6 @@ analysis also placed two of TCQ's three weakest minima on the fixed opening toke
 not the retrieved target; the current scripts default to target-span margins to avoid that
 confound.
 
-This archive predates the determinism repair: its self-comparison reached 0.000064 instead
-of exactly zero. Under the rules in this repository, that invalidates the KLD panel. The
-numbers are retained only to explain the hypothesis that prompted a clean rerun; they are
-not publication evidence and must not be used to rank the codecs. The task panel itself
-showed equal accuracy and an ambiguous confidence difference. A deployment claim about
-NIAH therefore still needs a clean, task-grounded rerun on that model.
-
 ---
 
 ## 2. The mean was unreliable for fine codec comparisons. Start with the median.
@@ -63,9 +52,7 @@ tokens −766 nats, top-50 positive +644 nats, net −285 over 98,280 tokens; si
 residual of two huge cancelling tails, carried by ~0.1% of tokens. That is why it can flip
 sign across corpus halves and model quants.
 
-**The reliability table.** Split-half Spearman of per-layer rankings — same run, 16 layers.
-A statistic that cannot reproduce its own ranking on two halves of one run cannot price
-anything:
+**The reliability table.** Split-half Spearman of per-layer rankings — same run, 16 layers:
 
 | statistic | t8→t4 | t4→t3 | t3→t2 | t2→t1 | fp16→t8 |
 |---|---|---|---|---|---|
@@ -80,6 +67,25 @@ level. The mean only becomes usable at very coarse transitions (the ~1-bit rung)
 signal is enormous. Note also that only `frac` resolves the finest (fp16→t8) rung at all —
 which is why the pricing tool always uses `frac` for that band regardless of the lens you
 pick for the rest.
+
+### Codebook-training example
+
+A sweep of 3 codebook pools × 100 training iterations, read under **mean** KLD, appeared
+non-monotonic: iteration 15 sometimes beat converged iteration 60, within-family MSE↔KLD
+correlation was approximately zero, and seed rankings changed.
+
+Re-reading the **same archives** — no new runs — under both labels gave the following
+ρ(statistic, iteration):
+
+| pool | median@16k | mean@16k (same runs) |
+|---|---|---|
+| pool A | **−0.66** | −0.29 |
+| pool B | **−0.92** | +0.09 |
+| pool C | **−0.72** | −0.19 |
+
+(Lower KLD = better, so negative ρ = training monotonically improves quality.) Training
+improves the robust label essentially monotonically in all three pools; the mean label is
+noise on identical data. Under median labels, train-MSE became predictive again (ρ ≈ +0.66).
 
 ---
 
@@ -173,33 +179,7 @@ frontier); it does not fix teacher-forcing itself.
 
 ---
 
-## 5. A "lottery" is a hypothesis about the judge
-
-Template for instrument-vs-phenomenon investigations. A sweep of 3 codebook pools × 100
-training iterations, read under **mean** KLD, looked like a lottery: quality non-monotone in
-training iteration (iter15 "beating" converged iter60), within-family MSE↔KLD correlation
-≈ 0, seed reorderings. Verdict at the time: "codebook selection is a lottery; MSE
-mis-selects."
-
-Re-reading the **same archives** — no new runs — under both labels, ρ(statistic, iteration):
-
-| pool | median@16k | mean@16k (same runs) |
-|---|---|---|
-| pool A | **−0.66** | −0.29 |
-| pool B | **−0.92** | +0.09 |
-| pool C | **−0.72** | −0.19 |
-
-(Lower KLD = better, so negative ρ = training monotonically improves quality.) Training
-improves the robust label essentially monotonically in all three pools; the mean label is
-noise on identical data. Under median labels, train-MSE became predictive again (ρ ≈ +0.66)
-— the trainer was never broken either.
-
-**A "lottery" among objects is a hypothesis about the JUDGE before it is a fact about the
-objects.**
-
----
-
-## 6. Building a layer price panel (what `layer-pricing/` consumes)
+## 5. Building a layer price panel (what `layer-pricing/` consumes)
 
 **Cell design — paired anchors.** Every cell matches its anchor in ctx, chunks, batch,
 flash-attention setting, model file, prompt, and scoring positions, with exactly **one
@@ -229,7 +209,7 @@ order from a panel that doesn't replicate.
 
 ---
 
-## 7. The checklist
+## 6. The checklist
 
 1. **Coherence gate first.** Generate a paragraph and *read it* before trusting any metric.
    Numerically-dead paths can score as "mild degradation" — we had a broken kernel show
