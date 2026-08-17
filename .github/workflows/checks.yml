@@ -1,0 +1,33 @@
+name: checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements.txt ruff
+      - run: ruff format --check .
+      - run: ruff check .
+      - run: python -m unittest discover -s tests -v
+      - run: bash -n kld-panel/kv_common.sh kld-panel/kv_kld_sweep.sh
+      - name: Check llama.cpp integration sources
+        run: |
+          mkdir upstream
+          git -C upstream init
+          git -C upstream remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C upstream fetch --depth 1 origin 34af94cd9ab277632e27caeec2d41de2fd091b31
+          git -C upstream checkout FETCH_HEAD
+          git -C upstream apply "$GITHUB_WORKSPACE/patches/kld-dump-hooks.patch"
+          c++ -std=c++17 -fsyntax-only \
+            -Iupstream -Iupstream/include -Iupstream/common -Iupstream/ggml/include \
+            upstream/tools/perplexity/perplexity.cpp
+          c++ -std=c++17 -fsyntax-only \
+            -Iupstream/include -Iupstream/common -Iupstream/ggml/include -Iupstream/ggml/src \
+            hazard-bench/frontier-hazard.cpp

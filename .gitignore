@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.venv/
+
+# Generated campaigns and large artifacts
+*.kld
+*.f32
+*.gguf
+logs/
+run*/
+kld_*/
+hazard_out_*.tsv
+lp_*.jsonl
+order.txt

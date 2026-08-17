@@ -1,0 +1,80 @@
+--- a/tools/perplexity/perplexity.cpp
++++ b/tools/perplexity/perplexity.cpp
+@@ -257,6 +257,19 @@
+     std::mutex mutex;
+     const int nv = 2*((n_vocab + 1)/2) + 4;
+     int counter = 0;
++    // Score only the last K positions of each window -- the decode-relevant frontier --
++    // instead of the whole scored half. Full-window scoring grades positions the model
++    // never decodes from in production, so it structurally cannot see position-targeted
++    // KV protection (sink/recency schemes, variable-bit-rate caches).
++    //   TURBO_SCORE_LAST_K=N  => last N positions
++    //   TURBO_SCORE_LAST_ONLY => K=1 (the exact decode position)
++    // Skipped positions are zero-filled: the mean over kld.count stays exact, but
++    // percentiles are meaningless in this mode and must be ignored.
++    static const int score_last_k = []() {
++        const char * k = getenv("TURBO_SCORE_LAST_K");
++        if (k) { int v = atoi(k); return v > 0 ? v : 0; }
++        return getenv("TURBO_SCORE_LAST_ONLY") != nullptr ? 1 : 0;
++    }();
+     auto compute = [&mutex, &counter, &base_log_probs, &kld, n_vocab, logits, tokens, n_token, nv, kld_values, p_diff_values] () {
+         kl_divergence_result local_kld;
+         while (true) {
+@@ -279,6 +292,11 @@
+                 break;
+             }
+             lock.unlock();
++            if (score_last_k > 0 && i < n_token - score_last_k) {
++                kld_values[i]    = 0.0f;
++                p_diff_values[i] = 0.0f;
++                continue;
++            }
+             std::pair<double, float> v = log_softmax(n_vocab, logits + size_t(i)*n_vocab, base_log_probs.data() + size_t(i)*nv, tokens[i+1], local_kld);
+             kld_values[i]    = (float)v.first;
+             p_diff_values[i] = v.second;
+@@ -1907,6 +1925,45 @@
+     llama_batch_free(batch);
+     LOG("\n");
+ 
++    // Write the per-position KLD array (chunk-major, PRE-sort) so two runs against the
++    // same base + token stream can be differenced position-by-position offline (common
++    // random numbers): shared per-token difficulty cancels, so the paired-delta standard
++    // error is far below sqrt(SE_cand^2 + SE_base^2). This is what turns one run into
++    // every statistic offline -- median, trimmed means, frac>tau, positional buckets,
++    // split-half reliability.
++    // Layout: [int32 n_pos_per_chunk][int32 n_chunk][float32 kld[n_chunk*n_pos]],
++    // chunk-major. The sidecar records whether skipped positions were zero-filled.
++    if (const char * dump_path = getenv("TURBO_KLD_DUMP")) {
++        std::ofstream dump(dump_path, std::ios::binary);
++        if (dump) {
++            const int32_t n_pos = n_ctx - 1 - first;
++            const int32_t nchk  = n_chunk;
++            int dump_last_k = 0;
++            if (const char * value = getenv("TURBO_SCORE_LAST_K")) {
++                dump_last_k = std::max(0, atoi(value));
++            } else if (getenv("TURBO_SCORE_LAST_ONLY")) {
++                dump_last_k = 1;
++            }
++            dump.write((const char *) &n_pos, sizeof(n_pos));
++            dump.write((const char *) &nchk,  sizeof(nchk));
++            dump.write((const char *) kld_values.data(), kld_values.size()*sizeof(float));
++            std::ofstream meta(std::string(dump_path) + ".meta");
++            if (meta) {
++                meta << "format_version=2\n"
++                     << "n_pos=" << n_pos << "\n"
++                     << "n_chunk=" << nchk << "\n"
++                     << "score_last_k=" << dump_last_k << "\n";
++            } else {
++                LOG_ERR("%s: TURBO_KLD_DUMP failed to write metadata for %s\n",
++                        __func__, dump_path);
++            }
++            LOG_INF("%s: TURBO_KLD_DUMP wrote %d x %d per-position KLDs to %s\n",
++                    __func__, n_pos, nchk, dump_path);
++        } else {
++            LOG_ERR("%s: TURBO_KLD_DUMP failed to open %s\n", __func__, dump_path);
++        }
++    }
++
+     if (kld.count < 100) return; // we do not wish to do statistics on so few values
+ 
+     std::sort(kld_values.begin(), kld_values.end());
